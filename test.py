@@ -102,7 +102,7 @@ if __name__ == '__main__':
         data_input = data.clone()
         data_input['pos_ref'] = None
         batch = repeat_data(data_input, num_samples).to(args.device)
-        
+
         clip_local = None
         for _ in range(2):  # Maximum number of retry
             try:

@@ -38,36 +38,51 @@ if __name__ == '__main__':
     config_name = os.path.basename(config_path)[:os.path.basename(config_path).rfind('.')]
     seed_all(config.train.seed)
 
-    
+
     # Logging
     if resume:
         log_dir = get_new_log_dir(args.logdir, prefix=config_name, tag='resume')
         os.symlink(os.path.realpath(resume_from), os.path.join(log_dir, os.path.basename(resume_from.rstrip("/"))))
     else:
-        log_dir = get_new_log_dir(args.logdir, prefix=config_name)
-        shutil.copytree('./models', os.path.join(log_dir, 'models'))
+        log_dir = get_new_log_dir(args.logdir, prefix=config_name)  # creates and returns log_dir with prefix+datetime
+        shutil.copytree('./models', os.path.join(log_dir, 'models'))  # copies model files to logs
     ckpt_dir = os.path.join(log_dir, 'checkpoints')
-    os.makedirs(ckpt_dir, exist_ok=True)
+    os.makedirs(ckpt_dir, exist_ok=True)  # create checkpoint file in log_dir
     logger = get_logger('train', log_dir)
-    writer = torch.utils.tensorboard.SummaryWriter(log_dir)
+    writer = torch.utils.tensorboard.SummaryWriter(log_dir)  # NOTE: change to wandb
     logger.info(args)
     logger.info(config)
-    shutil.copyfile(config_path, os.path.join(log_dir, os.path.basename(config_path)))
+    shutil.copyfile(config_path, os.path.join(log_dir, os.path.basename(config_path)))  # copy config to log_dir
 
     # Datasets and loaders
     logger.info('Loading datasets...')
-    transforms = CountNodesPerGraph()
+    transforms = CountNodesPerGraph()  # adds data.num_nodes_per_graph attribute
     train_set = ConformationDataset(config.dataset.train, transform=transforms)
     val_set = ConformationDataset(config.dataset.val, transform=transforms)
-    train_iterator = inf_iterator(DataLoader(train_set, config.train.batch_size, shuffle=True))
+    train_iterator = inf_iterator(DataLoader(train_set, config.train.batch_size, shuffle=True))  # might be issue?
     val_loader = DataLoader(val_set, config.train.batch_size, shuffle=False)
+
+    # Test batch
+    logger.info('Test batch')
+    _ = next(train_iterator).to(args.device)
+    logger.info(train_set.atom_types)
+    logger.info(train_set.edge_types)
+    logger.info(_.atom_type)
+    logger.info(_.pos)  # [bs, n_nodes, 3]
+    logger.info(_.edge_index)  # [2, n_nodes]
+    logger.info(_.edge_type)  # []
+    logger.info(_.batch)
+    logger.info(_.num_nodes_per_graph)
+    logger.info(_.num_graphs)
+    logger.info('Huh?')
 
     # Model
     logger.info('Building model...')
     model = get_model(config.model).to(args.device)
 
     # Optimizer
-    optimizer_global = get_optimizer(config.train.optimizer, model.model_global)
+    logger.info('Initialising optimisers...')
+    optimizer_global = get_optimizer(config.train.optimizer, model.model_global)  # what is model_global and local?
     optimizer_local = get_optimizer(config.train.optimizer, model.model_local)
     scheduler_global = get_scheduler(config.train.scheduler, optimizer_global)
     scheduler_local = get_scheduler(config.train.scheduler, optimizer_local)
@@ -164,7 +179,8 @@ if __name__ == '__main__':
         return avg_loss
 
     try:
-        for it in range(start_iter, config.train.max_iters + 1):
+        logger.info('Start training...')
+        for it in range(start_iter, config.train.max_iters + 1):  # [1, max_iters]
             train(it)
             if it % config.train.val_freq == 0 or it == config.train.max_iters:
                 avg_val_loss = validate(it)

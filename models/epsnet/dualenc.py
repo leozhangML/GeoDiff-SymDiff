@@ -162,7 +162,7 @@ class DualEncoderEpsNetwork(nn.Module):
                 is_sidechain=is_sidechain,
             )
             edge_length = get_distance(pos, edge_index).unsqueeze(-1)   # (E, 1)
-        local_edge_mask = is_local_edge(edge_type)  # (E, )
+        local_edge_mask = is_local_edge(edge_type)  # (E, )  # should always be > 0???
 
         # Emb time_step
         if self.model_type == 'dsm':
@@ -231,15 +231,16 @@ class DualEncoderEpsNetwork(nn.Module):
         else:
             edge_inv_local = self.grad_local_dist_mlp(h_pair_local) * (1.0 / sigma_edge) # (E_local, 1)
 
-        if return_edges:
+        if return_edges:  # default
             return edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask
         else:
-            return edge_inv_global, edge_inv_local
+            return edge_inv_global, edge_inv_local  # main things returned
     
 
     def get_loss(self, atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, 
                  anneal_power=2.0, return_unreduced_loss=False, return_unreduced_edge_loss=False, extend_order=True, extend_radius=True, is_sidechain=None):
         if self.model_type == 'diffusion':
+            # return_unreduced_loss is true for training, rest is default
             return self.get_loss_diffusion(atom_type, pos, bond_index, bond_type, batch, num_nodes_per_graph, num_graphs, 
                 anneal_power, return_unreduced_loss, return_unreduced_edge_loss, extend_order, extend_radius, is_sidechain)
         elif self.model_type == 'dsm':
@@ -257,13 +258,13 @@ class DualEncoderEpsNetwork(nn.Module):
         time_step = torch.randint(
             0, self.num_timesteps, size=(num_graphs//2+1, ), device=pos.device)
         time_step = torch.cat(
-            [time_step, self.num_timesteps-time_step-1], dim=0)[:num_graphs]
+            [time_step, self.num_timesteps-time_step-1], dim=0)[:num_graphs]  # num_graphs=bs
         a = self.alphas.index_select(0, time_step)  # (G, )
         # Perterb pos
         a_pos = a.index_select(0, node2graph).unsqueeze(-1)  # (N, 1)
         pos_noise = torch.zeros(size=pos.size(), device=pos.device)
         pos_noise.normal_()
-        pos_perturbed = pos + pos_noise * (1.0 - a_pos).sqrt() / a_pos.sqrt()
+        pos_perturbed = pos + pos_noise * (1.0 - a_pos).sqrt() / a_pos.sqrt()  # a_pos is \bar{\alpha}_t - why do we divide by this???
 
         # Update invariant edge features, as shown in equation 5-7
         edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask = self(
@@ -281,16 +282,16 @@ class DualEncoderEpsNetwork(nn.Module):
 
         edge2graph = node2graph.index_select(0, edge_index[0])
         # Compute sigmas_edge
-        a_edge = a.index_select(0, edge2graph).unsqueeze(-1)  # (E, 1)
+        a_edge = a.index_select(0, edge2graph).unsqueeze(-1)  # (E, 1) - E is the number of edges
 
         # Compute original and perturbed distances
         d_gt = get_distance(pos, edge_index).unsqueeze(-1)   # (E, 1)
         d_perturbed = edge_length
         # Filtering for protein
-        train_edge_mask = is_train_edge(edge_index, is_sidechain)
+        train_edge_mask = is_train_edge(edge_index, is_sidechain)  # default is 1D of True
         d_perturbed = torch.where(train_edge_mask.unsqueeze(-1), d_perturbed, d_gt)
 
-        if self.config.edge_encoder == 'gaussian':
+        if self.config.edge_encoder == 'gaussian':  # default is gaussian
             # Distances must be greater than 0 
             d_sgn = torch.sign(d_perturbed)
             d_perturbed = torch.clamp(d_perturbed * d_sgn, min=0.01, max=float('inf'))
@@ -318,7 +319,7 @@ class DualEncoderEpsNetwork(nn.Module):
 
         if return_unreduced_edge_loss:
             pass
-        elif return_unreduced_loss:
+        elif return_unreduced_loss:  # default
             return loss, loss_global, loss_local
         else:
             return loss
@@ -330,7 +331,7 @@ class DualEncoderEpsNetwork(nn.Module):
         if self.model_type == 'diffusion':
             return self.langevin_dynamics_sample_diffusion(atom_type, pos_init, bond_index, bond_type, batch, num_graphs, extend_order, extend_radius, 
                         n_steps, step_lr, clip, clip_local, clip_pos, min_sigma, is_sidechain,
-                        global_start_sigma, w_global, w_reg, 
+                        global_start_sigma, w_global, w_reg,
                         sampling_type=kwargs.get("sampling_type", 'ddpm_noisy'), eta=kwargs.get("eta", 1.))
         elif self.model_type == 'dsm':
             return self.langevin_dynamics_sample_dsm(atom_type, pos_init, bond_index, bond_type, batch, num_graphs, extend_order, extend_radius, 
@@ -346,7 +347,7 @@ class DualEncoderEpsNetwork(nn.Module):
             beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
             a = (1 - beta).cumprod(dim=0).index_select(0, t + 1)  # .view(-1, 1, 1, 1)
             return a
-        
+
         sigmas = (1.0 - self.alphas).sqrt() / self.alphas.sqrt()
         pos_traj = []
         if is_sidechain is not None:
